@@ -13,12 +13,15 @@ import (
 func NewRouter(cfg *config.Config, store *storage.Store, recipeService *apprecipes.Service) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	limiter := ratelimit.NewValkeyLimiter(cfg.Valkey.Addr(), cfg.Valkey.Password)
+	var limiter RateLimiter
+	if cfg.RateLimit.Enabled {
+		limiter = ratelimit.NewValkeyLimiter(cfg.Valkey.Addr(), cfg.Valkey.Password)
+	}
 	mailer, err := email.NewGmailMailer(cfg.Email.ContactEmail, cfg.Email.GmailAppPassword)
 	if err != nil {
 		mailer = nil
 	}
-	authHandler := NewAuthHandler(store, cfg.Auth, cfg.Google, cfg.Email, limiter, mailer)
+	authHandler := NewAuthHandler(store, cfg.Auth, cfg.Google, cfg.Email, cfg.RateLimit, limiter, mailer)
 
 	// API routes
 	mux.HandleFunc("GET /api/health", handleHealth)

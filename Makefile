@@ -1,4 +1,4 @@
-.PHONY: dev dev-go dev-web db db-stop swag types build run clean install help \
+.PHONY: dev dev-go dev-web db db-stop db-drop valkey-flush swag types build run clean install help \
        migrate-up migrate-down migrate-status migrate-create sqlc
 
 # Default target
@@ -10,6 +10,8 @@ help:
 	@echo "  make dev-web        - Start SvelteKit dev server only"
 	@echo "  make db             - Start Postgres and Valkey"
 	@echo "  make db-stop        - Stop Postgres and Valkey"
+	@echo "  make db-drop        - Drop the Postgres database"
+	@echo "  make valkey-flush   - Flush all Valkey keys"
 	@echo "  make migrate-up     - Run all pending migrations"
 	@echo "  make migrate-down   - Rollback last migration"
 	@echo "  make migrate-status - Show migration status"
@@ -58,6 +60,12 @@ db:
 
 db-stop:
 	@$(LOAD_ENV) && docker compose down
+
+db-drop:
+	@$(LOAD_ENV) && docker compose exec -T postgres sh -c 'PGPASSWORD="$${POSTGRES_PASSWORD}" psql -U "$${POSTGRES_USER}" -d postgres -c "DROP DATABASE IF EXISTS $${POSTGRES_DB};"'
+
+valkey-flush:
+	@$(LOAD_ENV) && docker compose exec -T valkey sh -c 'valkey-cli -a "$${VALKEY_PASSWORD}" FLUSHALL'
 
 # Migrations (uses env vars from shell or .env.development)
 # URL-encodes the password to handle special characters

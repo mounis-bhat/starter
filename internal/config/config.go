@@ -13,14 +13,15 @@ import (
 )
 
 type Config struct {
-	Port     string
-	Env      string
-	Database DatabaseConfig
-	Valkey   ValkeyConfig
-	Auth     AuthConfig
-	Google   GoogleOAuthConfig
-	Audit    AuditConfig
-	Email    EmailConfig
+	Port      string
+	Env       string
+	Database  DatabaseConfig
+	Valkey    ValkeyConfig
+	RateLimit RateLimitConfig
+	Auth      AuthConfig
+	Google    GoogleOAuthConfig
+	Audit     AuditConfig
+	Email     EmailConfig
 }
 
 type DatabaseConfig struct {
@@ -47,6 +48,21 @@ type ValkeyConfig struct {
 	Host     string
 	Port     string
 	Password string
+}
+
+type RateLimitRule struct {
+	Limit  int
+	Window time.Duration
+}
+
+type RateLimitConfig struct {
+	Enabled           bool
+	Register          RateLimitRule
+	Login             RateLimitRule
+	Password          RateLimitRule
+	VerifyEmailResend RateLimitRule
+	Google            RateLimitRule
+	Logout            RateLimitRule
 }
 
 type AuthConfig struct {
@@ -115,6 +131,39 @@ func Load() *Config {
 		PostLoginRedirectURL: os.Getenv("AUTH_POST_LOGIN_REDIRECT_URL"),
 	}
 
+	rateLimitEnabled := true
+	if value, ok := getEnvBool("RATE_LIMIT_ENABLED"); ok {
+		rateLimitEnabled = value
+	}
+
+	rateLimitConfig := RateLimitConfig{
+		Enabled: rateLimitEnabled,
+		Register: RateLimitRule{
+			Limit:  getEnvIntOrDefault("RATE_LIMIT_REGISTER_LIMIT", 3),
+			Window: time.Duration(getEnvIntOrDefault("RATE_LIMIT_REGISTER_WINDOW_SECONDS", 3600)) * time.Second,
+		},
+		Login: RateLimitRule{
+			Limit:  getEnvIntOrDefault("RATE_LIMIT_LOGIN_LIMIT", 5),
+			Window: time.Duration(getEnvIntOrDefault("RATE_LIMIT_LOGIN_WINDOW_SECONDS", 900)) * time.Second,
+		},
+		Password: RateLimitRule{
+			Limit:  getEnvIntOrDefault("RATE_LIMIT_PASSWORD_LIMIT", 5),
+			Window: time.Duration(getEnvIntOrDefault("RATE_LIMIT_PASSWORD_WINDOW_SECONDS", 900)) * time.Second,
+		},
+		VerifyEmailResend: RateLimitRule{
+			Limit:  getEnvIntOrDefault("RATE_LIMIT_VERIFY_EMAIL_LIMIT", 3),
+			Window: time.Duration(getEnvIntOrDefault("RATE_LIMIT_VERIFY_EMAIL_WINDOW_SECONDS", 3600)) * time.Second,
+		},
+		Google: RateLimitRule{
+			Limit:  getEnvIntOrDefault("RATE_LIMIT_GOOGLE_LIMIT", 10),
+			Window: time.Duration(getEnvIntOrDefault("RATE_LIMIT_GOOGLE_WINDOW_SECONDS", 900)) * time.Second,
+		},
+		Logout: RateLimitRule{
+			Limit:  getEnvIntOrDefault("RATE_LIMIT_LOGOUT_LIMIT", 10),
+			Window: time.Duration(getEnvIntOrDefault("RATE_LIMIT_LOGOUT_WINDOW_SECONDS", 60)) * time.Second,
+		},
+	}
+
 	if env == "production" {
 		authConfig.CookieName = "__Host-session"
 		authConfig.CookieSecure = true
@@ -144,7 +193,8 @@ func Load() *Config {
 			Port:     getEnvOrDefault("VALKEY_PORT", "6379"),
 			Password: os.Getenv("VALKEY_PASSWORD"),
 		},
-		Auth: authConfig,
+		RateLimit: rateLimitConfig,
+		Auth:      authConfig,
 		Google: GoogleOAuthConfig{
 			ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 			ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),

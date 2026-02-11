@@ -54,6 +54,7 @@ type AuthHandler struct {
 	cookies              CookieManager
 	oauthConfig          *oauth2.Config
 	rateLimiter          RateLimiter
+	rateLimits           config.RateLimitConfig
 	auditLogger          *AuditLogger
 	postLoginRedirectURL string
 	mailer               email.Mailer
@@ -117,7 +118,7 @@ type googleUserInfo struct {
 	Picture       string `json:"picture"`
 }
 
-func NewAuthHandler(store *storage.Store, cfg config.AuthConfig, googleCfg config.GoogleOAuthConfig, emailCfg config.EmailConfig, limiter RateLimiter, mailer email.Mailer) *AuthHandler {
+func NewAuthHandler(store *storage.Store, cfg config.AuthConfig, googleCfg config.GoogleOAuthConfig, emailCfg config.EmailConfig, rateLimitCfg config.RateLimitConfig, limiter RateLimiter, mailer email.Mailer) *AuthHandler {
 	var oauthConfig *oauth2.Config
 	if googleCfg.ClientID != "" && googleCfg.ClientSecret != "" && googleCfg.RedirectURI != "" {
 		oauthConfig = &oauth2.Config{
@@ -135,6 +136,7 @@ func NewAuthHandler(store *storage.Store, cfg config.AuthConfig, googleCfg confi
 		cookies:              NewCookieManager(cfg),
 		oauthConfig:          oauthConfig,
 		rateLimiter:          limiter,
+		rateLimits:           rateLimitCfg,
 		auditLogger:          NewAuditLogger(store.Queries),
 		postLoginRedirectURL: cfg.PostLoginRedirectURL,
 		mailer:               mailer,
@@ -206,7 +208,7 @@ func (h *AuthHandler) HandleMe(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	session, ok := sessionFromContext(r.Context())
 	if ok {
-		if !h.allowRequest(r.Context(), "logout:"+session.TokenHash, r, 10, time.Minute) {
+		if !h.allowRequest(r.Context(), "logout:"+session.TokenHash, r, h.rateLimits.Logout) {
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests"})
 			return
 		}
@@ -240,7 +242,7 @@ func (h *AuthHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 // @Failure      500  {object}  map[string]string
 // @Router       /auth/register [post]
 func (h *AuthHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
-	if !h.allowRequest(r.Context(), "register", r, 3, time.Hour) {
+	if !h.allowRequest(r.Context(), "register", r, h.rateLimits.Register) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests"})
 		return
 	}
@@ -352,7 +354,7 @@ func (h *AuthHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.allowRequest(r.Context(), "login:"+email, r, 5, 15*time.Minute) {
+	if !h.allowRequest(r.Context(), "login:"+email, r, h.rateLimits.Login) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests"})
 		return
 	}
@@ -474,7 +476,7 @@ func (h *AuthHandler) HandleChangePassword(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if !h.allowRequest(r.Context(), "password:"+user.ID, r, 5, 15*time.Minute) {
+	if !h.allowRequest(r.Context(), "password:"+user.ID, r, h.rateLimits.Password) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests"})
 		return
 	}
@@ -625,7 +627,7 @@ func (h *AuthHandler) HandleResendVerification(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if !h.allowRequest(r.Context(), "verify-email-resend:"+user.ID, r, 3, time.Hour) {
+	if !h.allowRequest(r.Context(), "verify-email-resend:"+user.ID, r, h.rateLimits.VerifyEmailResend) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests"})
 		return
 	}
@@ -664,7 +666,7 @@ func (h *AuthHandler) HandleResendVerification(w http.ResponseWriter, r *http.Re
 // @Failure      500  {object}  map[string]string
 // @Router       /auth/google [get]
 func (h *AuthHandler) HandleGoogleLogin(w http.ResponseWriter, r *http.Request) {
-	if !h.allowRequest(r.Context(), "google", r, 10, 15*time.Minute) {
+	if !h.allowRequest(r.Context(), "google", r, h.rateLimits.Google) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests"})
 		return
 	}
@@ -988,7 +990,15 @@ func wantsJSON(r *http.Request) bool {
 	return false
 }
 
-func (h *AuthHandler) allowRequest(ctx context.Context, key string, r *http.Request, limit int, window time.Duration) bool {
+func (h *AuthHandler) allowRequest(ctx context.Context, key string, r *http.Request, rule config.RateLimitRule) bool {
+	if !h.rateLimits.Enabled {
+		return true
+	}
+
+	if rule.Limit <= 0 || rule.Window <= 0 {
+		return true
+	}
+
 	if h.rateLimiter == nil {
 		return true
 	}
@@ -999,7 +1009,7 @@ func (h *AuthHandler) allowRequest(ctx context.Context, key string, r *http.Requ
 		ipKey = ip.String()
 	}
 
-	allowed, err := h.rateLimiter.Allow(ctx, key+":"+ipKey, limit, window)
+	allowed, err := h.rateLimiter.Allow(ctx, key+":"+ipKey, rule.Limit, rule.Window)
 	if err != nil {
 		return true
 	}
