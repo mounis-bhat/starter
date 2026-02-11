@@ -66,11 +66,11 @@ func (m *GmailMailer) Send(_ context.Context, to, subject, textBody, htmlBody st
 	}
 	defer client.Close()
 
-	if ok, _ := client.Extension("STARTTLS"); ok {
-		tlsConfig := &tls.Config{ServerName: gmailSMTPHost}
-		if err := client.StartTLS(tlsConfig); err != nil {
-			return err
-		}
+	if ok, _ := client.Extension("STARTTLS"); !ok {
+		return errors.New("smtp server does not support STARTTLS")
+	}
+	if err := client.StartTLS(&tls.Config{ServerName: gmailSMTPHost}); err != nil {
+		return err
 	}
 
 	auth := smtp.PlainAuth("", m.username, m.password, gmailSMTPHost)

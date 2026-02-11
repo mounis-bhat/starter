@@ -61,7 +61,7 @@ func ensureMigrationsApplied(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 
 	var count int
-	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM "+migrationsTable).Scan(&count); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM goose_db_version").Scan(&count); err != nil {
 		return fmt.Errorf("failed to read %s: %w", migrationsTable, err)
 	}
 

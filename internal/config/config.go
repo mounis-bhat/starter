@@ -73,6 +73,7 @@ type AuthConfig struct {
 	SessionMaxAge        time.Duration
 	IdleTimeout          time.Duration
 	PostLoginRedirectURL string
+	TrustedProxyHeader   string
 }
 
 type GoogleOAuthConfig struct {
@@ -142,6 +143,7 @@ func Load() *Config {
 		SessionMaxAge:        7 * 24 * time.Hour,
 		IdleTimeout:          30 * time.Minute,
 		PostLoginRedirectURL: os.Getenv("AUTH_POST_LOGIN_REDIRECT_URL"),
+		TrustedProxyHeader:   os.Getenv("TRUSTED_PROXY_HEADER"),
 	}
 
 	rateLimitEnabled := true

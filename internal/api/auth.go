@@ -59,6 +59,7 @@ type AuthHandler struct {
 	postLoginRedirectURL string
 	mailer               email.Mailer
 	appBaseURL           string
+	trustedProxyHeader   string
 }
 
 type RateLimiter interface {
@@ -130,6 +131,19 @@ func NewAuthHandler(store *storage.Store, cfg config.AuthConfig, googleCfg confi
 		}
 	}
 
+	postLoginRedirect := cfg.PostLoginRedirectURL
+	if postLoginRedirect != "" {
+		parsed, err := url.Parse(postLoginRedirect)
+		if err != nil || (parsed.Scheme != "" && parsed.Scheme != "http" && parsed.Scheme != "https") {
+			postLoginRedirect = "/"
+		} else if parsed.Host != "" {
+			baseURL := strings.TrimRight(emailCfg.AppBaseURL, "/")
+			if baseParsed, err := url.Parse(baseURL); err != nil || parsed.Host != baseParsed.Host {
+				postLoginRedirect = "/"
+			}
+		}
+	}
+
 	return &AuthHandler{
 		queries:              store.Queries,
 		sessions:             domain.NewSessionService(store.Queries, cfg.SessionMaxAge, cfg.IdleTimeout),
@@ -138,9 +152,10 @@ func NewAuthHandler(store *storage.Store, cfg config.AuthConfig, googleCfg confi
 		rateLimiter:          limiter,
 		rateLimits:           rateLimitCfg,
 		auditLogger:          NewAuditLogger(store.Queries),
-		postLoginRedirectURL: cfg.PostLoginRedirectURL,
+		postLoginRedirectURL: postLoginRedirect,
 		mailer:               mailer,
 		appBaseURL:           strings.TrimRight(emailCfg.AppBaseURL, "/"),
+		trustedProxyHeader:   cfg.TrustedProxyHeader,
 	}
 }
 
@@ -219,11 +234,11 @@ func (h *AuthHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 
 	h.cookies.ClearSessionCookie(w)
 	if ok {
-		h.auditLogger.Log(r.Context(), "session_revoked", uuidFromString(session.User.ID), ipFromRequest(r), r.UserAgent(), map[string]any{
+		h.auditLogger.Log(r.Context(), "session_revoked", uuidFromString(session.User.ID), h.ipFromRequest(r), r.UserAgent(), map[string]any{
 			"reason":             "logout",
 			"session_token_hash": session.TokenHash,
 		})
-		h.auditLogger.Log(r.Context(), "logout", uuidFromString(session.User.ID), ipFromRequest(r), r.UserAgent(), map[string]any{
+		h.auditLogger.Log(r.Context(), "logout", uuidFromString(session.User.ID), h.ipFromRequest(r), r.UserAgent(), map[string]any{
 			"session_token_hash": session.TokenHash,
 		})
 	}
@@ -248,6 +263,7 @@ func (h *AuthHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req RegisterRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
@@ -271,7 +287,7 @@ func (h *AuthHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.queries.GetUserByEmail(r.Context(), email); err == nil {
-		h.auditLogger.Log(r.Context(), "register_duplicate", pgtype.UUID{}, ipFromRequest(r), r.UserAgent(), map[string]any{
+		h.auditLogger.Log(r.Context(), "register_duplicate", pgtype.UUID{}, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 			"email_hash": hashEmail(email),
 		})
 		writeJSON(w, http.StatusOK, AuthStatusResponse{Status: "ok"})
@@ -298,7 +314,7 @@ func (h *AuthHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
-			h.auditLogger.Log(r.Context(), "register_duplicate", pgtype.UUID{}, ipFromRequest(r), r.UserAgent(), map[string]any{
+			h.auditLogger.Log(r.Context(), "register_duplicate", pgtype.UUID{}, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 				"email_hash": hashEmail(email),
 			})
 			writeJSON(w, http.StatusOK, AuthStatusResponse{Status: "ok"})
@@ -309,7 +325,7 @@ func (h *AuthHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userAgent := r.UserAgent()
-	ipAddress := ipFromRequest(r)
+	ipAddress := h.ipFromRequest(r)
 	if revoked := h.revokeExistingSession(r); revoked {
 		h.auditLogger.Log(r.Context(), "session_revoked", user.ID, ipAddress, userAgent, map[string]any{
 			"reason": "rotation",
@@ -343,6 +359,7 @@ func (h *AuthHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 // @Router       /auth/login [post]
 func (h *AuthHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
@@ -368,7 +385,7 @@ func (h *AuthHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			domain.FakePasswordHash(req.Password)
-			h.auditLogger.Log(r.Context(), "login_failure", pgtype.UUID{}, ipFromRequest(r), r.UserAgent(), map[string]any{
+			h.auditLogger.Log(r.Context(), "login_failure", pgtype.UUID{}, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 				"email_hash": hashEmail(email),
 				"reason":     "not_found",
 			})
@@ -381,7 +398,7 @@ func (h *AuthHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	if user.LockedUntil.Valid && user.LockedUntil.Time.After(now) {
-		h.auditLogger.Log(r.Context(), "login_failure", user.ID, ipFromRequest(r), r.UserAgent(), map[string]any{
+		h.auditLogger.Log(r.Context(), "login_failure", user.ID, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 			"email_hash": hashEmail(email),
 			"reason":     "locked",
 		})
@@ -397,7 +414,7 @@ func (h *AuthHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	if user.Provider != "credentials" || !user.PasswordHash.Valid {
 		domain.FakePasswordHash(req.Password)
-		h.auditLogger.Log(r.Context(), "login_failure", user.ID, ipFromRequest(r), r.UserAgent(), map[string]any{
+		h.auditLogger.Log(r.Context(), "login_failure", user.ID, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 			"email_hash": hashEmail(email),
 			"reason":     "invalid_provider",
 		})
@@ -425,12 +442,12 @@ func (h *AuthHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 				return
 			}
-			h.auditLogger.Log(r.Context(), "account_lockout", user.ID, ipFromRequest(r), r.UserAgent(), map[string]any{
+			h.auditLogger.Log(r.Context(), "account_lockout", user.ID, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 				"email_hash": hashEmail(email),
 			})
-			h.sendLockoutEmail(r.Context(), user, lockUntil, ipFromRequest(r), r.UserAgent())
+			h.sendLockoutEmail(r.Context(), user, lockUntil, h.ipFromRequest(r), r.UserAgent())
 		}
-		h.auditLogger.Log(r.Context(), "login_failure", user.ID, ipFromRequest(r), r.UserAgent(), map[string]any{
+		h.auditLogger.Log(r.Context(), "login_failure", user.ID, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 			"email_hash": hashEmail(email),
 			"reason":     "invalid_password",
 		})
@@ -444,7 +461,7 @@ func (h *AuthHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userAgent := r.UserAgent()
-	ipAddress := ipFromRequest(r)
+	ipAddress := h.ipFromRequest(r)
 	token, _, err := h.sessions.CreateSession(r.Context(), user.ID, ipAddress, userAgent)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
@@ -482,6 +499,7 @@ func (h *AuthHandler) HandleChangePassword(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req ChangePasswordRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
@@ -505,7 +523,7 @@ func (h *AuthHandler) HandleChangePassword(w http.ResponseWriter, r *http.Reques
 	}
 
 	if stored.Provider != "credentials" || !stored.PasswordHash.Valid {
-		h.auditLogger.Log(r.Context(), "password_change_failure", stored.ID, ipFromRequest(r), r.UserAgent(), map[string]any{
+		h.auditLogger.Log(r.Context(), "password_change_failure", stored.ID, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 			"reason": "invalid_provider",
 		})
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid credentials"})
@@ -518,7 +536,7 @@ func (h *AuthHandler) HandleChangePassword(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !valid {
-		h.auditLogger.Log(r.Context(), "password_change_failure", stored.ID, ipFromRequest(r), r.UserAgent(), map[string]any{
+		h.auditLogger.Log(r.Context(), "password_change_failure", stored.ID, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 			"reason": "invalid_current_password",
 		})
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid credentials"})
@@ -526,7 +544,7 @@ func (h *AuthHandler) HandleChangePassword(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := domain.ValidatePassword(req.NewPassword); err != nil {
-		h.auditLogger.Log(r.Context(), "password_change_failure", stored.ID, ipFromRequest(r), r.UserAgent(), map[string]any{
+		h.auditLogger.Log(r.Context(), "password_change_failure", stored.ID, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 			"reason": "invalid_new_password",
 		})
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -552,13 +570,13 @@ func (h *AuthHandler) HandleChangePassword(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	h.auditLogger.Log(r.Context(), "session_revoked", stored.ID, ipFromRequest(r), r.UserAgent(), map[string]any{
+	h.auditLogger.Log(r.Context(), "session_revoked", stored.ID, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 		"reason": "password_change",
 		"scope":  "all",
 	})
 
 	userAgent := r.UserAgent()
-	ipAddress := ipFromRequest(r)
+	ipAddress := h.ipFromRequest(r)
 	token, _, err := h.sessions.CreateSession(r.Context(), stored.ID, ipAddress, userAgent)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
@@ -603,7 +621,7 @@ func (h *AuthHandler) HandleVerifyEmail(w http.ResponseWriter, r *http.Request) 
 			h.writeVerificationResponse(w, r, http.StatusInternalServerError, "Verification failed", "We could not verify your email right now. Please try again.")
 			return
 		}
-		h.auditLogger.Log(r.Context(), "email_verified", user.ID, ipFromRequest(r), r.UserAgent(), nil)
+		h.auditLogger.Log(r.Context(), "email_verified", user.ID, h.ipFromRequest(r), r.UserAgent(), nil)
 	}
 
 	h.writeVerificationResponse(w, r, http.StatusOK, "Email verified", "Your email has been verified successfully.")
@@ -650,7 +668,7 @@ func (h *AuthHandler) HandleResendVerification(w http.ResponseWriter, r *http.Re
 	}
 
 	if !stored.EmailVerified {
-		h.sendVerificationEmail(r.Context(), stored, ipFromRequest(r), r.UserAgent())
+		h.sendVerificationEmail(r.Context(), stored, h.ipFromRequest(r), r.UserAgent())
 	}
 
 	writeJSON(w, http.StatusOK, AuthStatusResponse{Status: "ok"})
@@ -769,7 +787,7 @@ func (h *AuthHandler) HandleGoogleCallback(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
@@ -794,7 +812,7 @@ func (h *AuthHandler) HandleGoogleCallback(w http.ResponseWriter, r *http.Reques
 
 	if existing, err := h.queries.GetUserByEmail(r.Context(), email); err == nil {
 		if existing.Provider != "google" || !existing.GoogleID.Valid || existing.GoogleID.String != info.Sub {
-			h.auditLogger.Log(r.Context(), "oauth_login_failure", pgtype.UUID{}, ipFromRequest(r), r.UserAgent(), map[string]any{
+			h.auditLogger.Log(r.Context(), "oauth_login_failure", pgtype.UUID{}, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 				"email_hash": hashEmail(email),
 				"reason":     "email_conflict",
 			})
@@ -820,7 +838,7 @@ func (h *AuthHandler) HandleGoogleCallback(w http.ResponseWriter, r *http.Reques
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
-			h.auditLogger.Log(r.Context(), "oauth_login_failure", pgtype.UUID{}, ipFromRequest(r), r.UserAgent(), map[string]any{
+			h.auditLogger.Log(r.Context(), "oauth_login_failure", pgtype.UUID{}, h.ipFromRequest(r), r.UserAgent(), map[string]any{
 				"email_hash": hashEmail(email),
 				"reason":     "email_conflict",
 			})
@@ -832,7 +850,7 @@ func (h *AuthHandler) HandleGoogleCallback(w http.ResponseWriter, r *http.Reques
 	}
 
 	userAgent := r.UserAgent()
-	ipAddress := ipFromRequest(r)
+	ipAddress := h.ipFromRequest(r)
 	if revoked := h.revokeExistingSession(r); revoked {
 		h.auditLogger.Log(r.Context(), "session_revoked", user.ID, ipAddress, userAgent, map[string]any{
 			"reason": "rotation",
@@ -1003,7 +1021,7 @@ func (h *AuthHandler) allowRequest(ctx context.Context, key string, r *http.Requ
 		return true
 	}
 
-	ip := ipFromRequest(r)
+	ip := h.ipFromRequest(r)
 	ipKey := "unknown"
 	if ip != nil {
 		ipKey = ip.String()
@@ -1011,7 +1029,7 @@ func (h *AuthHandler) allowRequest(ctx context.Context, key string, r *http.Requ
 
 	allowed, err := h.rateLimiter.Allow(ctx, key+":"+ipKey, rule.Limit, rule.Window)
 	if err != nil {
-		return true
+		return false
 	}
 	return allowed
 }
@@ -1062,7 +1080,16 @@ func clearOAuthCookie(w http.ResponseWriter, cookies CookieManager, name string)
 	})
 }
 
-func ipFromRequest(r *http.Request) *netip.Addr {
+func (h *AuthHandler) ipFromRequest(r *http.Request) *netip.Addr {
+	if h.trustedProxyHeader != "" {
+		if value := r.Header.Get(h.trustedProxyHeader); value != "" {
+			raw := strings.TrimSpace(strings.SplitN(value, ",", 2)[0])
+			if addr, err := netip.ParseAddr(raw); err == nil {
+				return &addr
+			}
+		}
+	}
+
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		if addr, parseErr := netip.ParseAddr(r.RemoteAddr); parseErr == nil {

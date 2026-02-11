@@ -90,6 +90,7 @@ func (h *AvatarHandler) HandleAvatarUploadURL(w http.ResponseWriter, r *http.Req
 	}
 
 	var req AvatarUploadURLRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
@@ -155,6 +156,7 @@ func (h *AvatarHandler) HandleAvatarConfirm(w http.ResponseWriter, r *http.Reque
 	}
 
 	var req AvatarConfirmRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return

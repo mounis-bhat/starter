@@ -37,7 +37,6 @@ cp .env.example .env.development
 
 # Generate secrets
 openssl rand -base64 32  # for POSTGRES_PASSWORD
-openssl rand -base64 32  # for SESSION_SECRET
 ```
 
 ## Development
@@ -76,7 +75,22 @@ Local development runs over HTTP for convenience. Production must run behind HTT
   - `SameSite=Lax`
   - `Path=/api/auth/google/callback`, `Max-Age=5 minutes`
 - `AUTH_COOKIE_SECURE` overrides the secure flag; if set to `false`, the cookie name falls back to `session` (no `__Host-` prefix).
-- `SESSION_SECRET` must be strong and unique per environment; rotate on compromise.
+
+### Reverse proxy / trusted IP
+
+When running behind a reverse proxy (nginx, Cloudflare, AWS ALB), set `TRUSTED_PROXY_HEADER` to the header your proxy uses for the real client IP:
+
+```sh
+# nginx / Cloudflare
+TRUSTED_PROXY_HEADER="X-Forwarded-For"
+
+# or if your proxy sets X-Real-IP
+TRUSTED_PROXY_HEADER="X-Real-IP"
+```
+
+This is used for **rate limiting** and **audit logging**. Without it, all requests appear to come from the proxy's IP.
+
+Leave empty (or unset) when not behind a proxy — the app uses `RemoteAddr` directly, which is correct and safe in that case. Do not enable this without a trusted proxy, as clients could spoof the header to bypass rate limits.
 
 ### Security headers
 

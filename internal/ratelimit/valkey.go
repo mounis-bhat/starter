@@ -48,7 +48,7 @@ func (l *ValkeyLimiter) Allow(ctx context.Context, key string, limit int, window
 	pipe.Expire(ctx, redisKey, window+time.Second)
 	_, err := pipe.Exec(ctx)
 	if err != nil {
-		return true, err
+		return false, err
 	}
 
 	return countCmd.Val() <= int64(limit), nil

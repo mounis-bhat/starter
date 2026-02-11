@@ -41,6 +41,7 @@ type Recipe struct {
 func makeRecipeHandler(service *apprecipes.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req RecipeRequest
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&req); err != nil {
