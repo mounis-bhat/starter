@@ -905,8 +905,15 @@ func (h *AuthHandler) sendVerificationEmail(ctx context.Context, user db.User, i
 	}
 
 	subject := "Verify your email"
-	textBody := fmt.Sprintf("Hi %s,\n\nPlease verify your email by clicking the link below:\n%s\n\nIf you did not create an account, you can ignore this email.\n", name, verificationURL)
-	htmlBody := fmt.Sprintf("<p>Hi %s,</p><p>Please verify your email by clicking the link below:</p><p><a href=\"%s\">Verify email</a></p><p>If you did not create an account, you can ignore this email.</p>", html.EscapeString(name), html.EscapeString(verificationURL))
+	params := email.EmailParams{
+		Greeting:   fmt.Sprintf("Hi %s,", name),
+		BodyLines:  []string{"Please verify your email address to get started."},
+		ButtonText: "Verify Email",
+		ButtonURL:  verificationURL,
+		FooterText: "If you did not create an account, you can safely ignore this email.",
+	}
+	textBody := email.RenderText(params)
+	htmlBody := email.RenderHTML(params)
 
 	if err := h.mailer.Send(ctx, user.Email, subject, textBody, htmlBody); err != nil {
 		h.auditLogger.Log(ctx, "email_send_failed", user.ID, ip, userAgent, map[string]any{
@@ -929,10 +936,24 @@ func (h *AuthHandler) sendLockoutEmail(ctx context.Context, user db.User, locked
 		ipValue = ip.String()
 	}
 
+	name := strings.TrimSpace(user.Name)
+	if name == "" {
+		name = user.Email
+	}
+
 	until := lockedUntil.UTC().Format(time.RFC1123)
 	subject := "Your account has been locked"
-	textBody := fmt.Sprintf("We locked your account after too many failed login attempts.\n\nLockout ends: %s\nIP: %s\n\nIf this wasn't you, please reset your password.", until, ipValue)
-	htmlBody := fmt.Sprintf("<p>We locked your account after too many failed login attempts.</p><p><strong>Lockout ends:</strong> %s<br /><strong>IP:</strong> %s</p><p>If this wasn't you, please reset your password.</p>", html.EscapeString(until), html.EscapeString(ipValue))
+	params := email.EmailParams{
+		Greeting: fmt.Sprintf("Hi %s,", name),
+		BodyLines: []string{
+			"We locked your account after too many failed login attempts.",
+			fmt.Sprintf("Lockout ends: %s", until),
+			fmt.Sprintf("IP address: %s", ipValue),
+		},
+		FooterText: "If this wasn't you, please reset your password immediately.",
+	}
+	textBody := email.RenderText(params)
+	htmlBody := email.RenderHTML(params)
 
 	if err := h.mailer.Send(ctx, user.Email, subject, textBody, htmlBody); err != nil {
 		h.auditLogger.Log(ctx, "email_send_failed", user.ID, ip, userAgent, map[string]any{
