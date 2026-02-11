@@ -8,9 +8,10 @@ import (
 	"github.com/mounis-bhat/starter/internal/email"
 	"github.com/mounis-bhat/starter/internal/ratelimit"
 	"github.com/mounis-bhat/starter/internal/storage"
+	"github.com/mounis-bhat/starter/internal/storage/blob"
 )
 
-func NewRouter(cfg *config.Config, store *storage.Store, recipeService *apprecipes.Service) *http.ServeMux {
+func NewRouter(cfg *config.Config, store *storage.Store, recipeService *apprecipes.Service, blobClient *blob.Client) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	var limiter RateLimiter
@@ -22,6 +23,7 @@ func NewRouter(cfg *config.Config, store *storage.Store, recipeService *apprecip
 		mailer = nil
 	}
 	authHandler := NewAuthHandler(store, cfg.Auth, cfg.Google, cfg.Email, cfg.RateLimit, limiter, mailer)
+	avatarHandler := NewAvatarHandler(store, blobClient, cfg.Storage)
 
 	// API routes
 	mux.HandleFunc("GET /api/health", handleHealth)
@@ -34,6 +36,9 @@ func NewRouter(cfg *config.Config, store *storage.Store, recipeService *apprecip
 	mux.HandleFunc("GET /api/auth/google/callback", authHandler.HandleGoogleCallback)
 	mux.HandleFunc("GET /api/auth/verify-email", authHandler.HandleVerifyEmail)
 	mux.Handle("GET /api/auth/me", authHandler.RequireAuth(http.HandlerFunc(authHandler.HandleMe)))
+	mux.Handle("GET /api/auth/avatar-url", authHandler.RequireAuth(http.HandlerFunc(avatarHandler.HandleAvatarURL)))
+	mux.Handle("POST /api/auth/avatar/upload-url", authHandler.RequireAuth(http.HandlerFunc(avatarHandler.HandleAvatarUploadURL)))
+	mux.Handle("POST /api/auth/avatar/confirm", authHandler.RequireAuth(http.HandlerFunc(avatarHandler.HandleAvatarConfirm)))
 	mux.Handle("POST /api/auth/logout", authHandler.RequireAuth(http.HandlerFunc(authHandler.HandleLogout)))
 	mux.Handle("POST /api/auth/password", authHandler.RequireAuth(http.HandlerFunc(authHandler.HandleChangePassword)))
 	mux.Handle("POST /api/auth/verify-email/resend", authHandler.RequireAuth(http.HandlerFunc(authHandler.HandleResendVerification)))

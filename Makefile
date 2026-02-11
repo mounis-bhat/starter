@@ -8,8 +8,8 @@ help:
 	@echo "  make dev            - Start everything (Genkit UI + Go + SvelteKit)"
 	@echo "  make dev-go         - Start Go server with hot reload (air)"
 	@echo "  make dev-web        - Start SvelteKit dev server only"
-	@echo "  make db             - Start Postgres and Valkey"
-	@echo "  make db-stop        - Stop Postgres and Valkey"
+	@echo "  make db             - Start Postgres, Valkey, and MinIO"
+	@echo "  make db-stop        - Stop Postgres, Valkey, and MinIO"
 	@echo "  make db-drop        - Drop the Postgres database"
 	@echo "  make valkey-flush   - Flush all Valkey keys"
 	@echo "  make migrate-up     - Run all pending migrations"
@@ -44,7 +44,7 @@ dev:
 	@echo "Genkit UI:  http://localhost:4000"
 	@echo "Press Ctrl+C to stop all"
 	@$(MAKE) types
-	@$(LOAD_ENV) && docker compose up -d postgres valkey
+	@$(LOAD_ENV) && docker compose up -d postgres valkey minio minio-init
 	@bash -c 'trap "$(LOAD_ENV) && docker compose down; kill $$(jobs -p) 2>/dev/null" INT TERM EXIT; genkit start -- air & cd web && bun dev & wait' || [ $$? -eq 130 ]
 
 # Individual dev servers
@@ -56,7 +56,7 @@ dev-web:
 
 # Database
 db:
-	@$(LOAD_ENV) && docker compose up -d postgres valkey
+	@$(LOAD_ENV) && docker compose up -d postgres valkey minio minio-init
 
 db-stop:
 	@$(LOAD_ENV) && docker compose down

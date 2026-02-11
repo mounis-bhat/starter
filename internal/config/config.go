@@ -22,6 +22,7 @@ type Config struct {
 	Google    GoogleOAuthConfig
 	Audit     AuditConfig
 	Email     EmailConfig
+	Storage   StorageConfig
 }
 
 type DatabaseConfig struct {
@@ -89,6 +90,18 @@ type EmailConfig struct {
 	AppBaseURL       string
 	ContactEmail     string
 	GmailAppPassword string
+}
+
+type StorageConfig struct {
+	Endpoint           string
+	Region             string
+	Bucket             string
+	AccessKeyID        string
+	SecretAccessKey    string
+	ForcePathStyle     bool
+	PresignUploadTTL   time.Duration
+	PresignDownloadTTL time.Duration
+	AvatarMaxBytes     int64
 }
 
 func (v ValkeyConfig) Addr() string {
@@ -209,6 +222,17 @@ func Load() *Config {
 			ContactEmail:     os.Getenv("CONTACT_EMAIL"),
 			GmailAppPassword: os.Getenv("GMAIL_APP_PASSWORD"),
 		},
+		Storage: StorageConfig{
+			Endpoint:           strings.TrimRight(os.Getenv("S3_ENDPOINT"), "/"),
+			Region:             getEnvOrDefault("S3_REGION", "us-east-1"),
+			Bucket:             os.Getenv("S3_BUCKET"),
+			AccessKeyID:        os.Getenv("S3_ACCESS_KEY_ID"),
+			SecretAccessKey:    os.Getenv("S3_SECRET_ACCESS_KEY"),
+			ForcePathStyle:     getEnvBoolOrDefault("S3_FORCE_PATH_STYLE", true),
+			PresignUploadTTL:   time.Duration(getEnvIntOrDefault("S3_PRESIGN_UPLOAD_TTL_SECONDS", 900)) * time.Second,
+			PresignDownloadTTL: time.Duration(getEnvIntOrDefault("S3_PRESIGN_DOWNLOAD_TTL_SECONDS", 600)) * time.Second,
+			AvatarMaxBytes:     int64(getEnvIntOrDefault("S3_AVATAR_MAX_BYTES", 5*1024*1024)),
+		},
 	}
 }
 
@@ -229,6 +253,14 @@ func getEnvBool(key string) (bool, bool) {
 		return false, false
 	}
 	return parsed, true
+}
+
+func getEnvBoolOrDefault(key string, defaultValue bool) bool {
+	value, ok := getEnvBool(key)
+	if !ok {
+		return defaultValue
+	}
+	return value
 }
 
 func getEnvIntOrDefault(key string, defaultValue int) int {

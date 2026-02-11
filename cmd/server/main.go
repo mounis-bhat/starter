@@ -12,6 +12,7 @@ import (
 	"github.com/mounis-bhat/starter/internal/config"
 	"github.com/mounis-bhat/starter/internal/service"
 	"github.com/mounis-bhat/starter/internal/storage"
+	"github.com/mounis-bhat/starter/internal/storage/blob"
 
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
@@ -44,6 +45,21 @@ func main() {
 	}
 	defer store.Close()
 
+	blobClient, err := blob.New(ctx, blob.Config{
+		Endpoint:           cfg.Storage.Endpoint,
+		Region:             cfg.Storage.Region,
+		Bucket:             cfg.Storage.Bucket,
+		AccessKeyID:        cfg.Storage.AccessKeyID,
+		SecretAccessKey:    cfg.Storage.SecretAccessKey,
+		ForcePathStyle:     cfg.Storage.ForcePathStyle,
+		PresignUploadTTL:   cfg.Storage.PresignUploadTTL,
+		PresignDownloadTTL: cfg.Storage.PresignDownloadTTL,
+	})
+	if err != nil {
+		log.Printf("blob storage disabled: %v", err)
+		blobClient = nil
+	}
+
 	auditCleanup := service.NewAuditCleanupService(store.Queries)
 	cronScheduler := cron.New()
 	if cfg.Audit.CleanupCron != "" && cfg.Audit.RetentionDays > 0 {
@@ -71,7 +87,7 @@ func main() {
 	}
 
 	// Setup router
-	mux := api.NewRouter(cfg, store, recipeService)
+	mux := api.NewRouter(cfg, store, recipeService, blobClient)
 	root := http.NewServeMux()
 	root.Handle("/", api.WithSecurityHeaders(cfg, mux))
 
