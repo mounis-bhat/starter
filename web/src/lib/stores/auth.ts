@@ -1,13 +1,10 @@
+import type { components } from '$lib/api-types';
 import { writable } from 'svelte/store';
 
-export type AuthUser = {
-	id: string;
-	email: string;
-	email_verified: boolean;
-	name: string;
-	picture?: string | null;
-	provider: string;
-};
+type AuthMeResponse = components['schemas']['api.AuthMeResponse'];
+type AvatarURLResponse = components['schemas']['api.AvatarURLResponse'];
+
+export type AuthUser = AuthMeResponse;
 
 export const user = writable<AuthUser | null>(null);
 export const authLoading = writable(true);
@@ -21,8 +18,20 @@ export async function initAuth(force = false) {
 	try {
 		const res = await fetch('/api/auth/me');
 		if (res.ok) {
-			const data = (await res.json()) as AuthUser;
+			const data = (await res.json()) as AuthMeResponse;
 			user.set(data);
+
+			const avatarRes = await fetch('/api/auth/avatar-url');
+			if (avatarRes.ok) {
+				const avatar = (await avatarRes.json()) as AvatarURLResponse;
+				user.update((current) => {
+					if (!current) return current;
+					return {
+						...current,
+						picture: avatar.url ?? current.picture
+					};
+				});
+			}
 		}
 	} finally {
 		authLoading.set(false);

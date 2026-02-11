@@ -1,4 +1,4 @@
-.PHONY: dev dev-go dev-web db db-stop db-drop valkey-flush swag types build run clean install help \
+.PHONY: dev dev-logs dev-go dev-web db db-stop db-drop valkey-flush swag types build run clean install help \
        migrate-up migrate-down migrate-status migrate-create sqlc
 
 # Default target
@@ -46,6 +46,10 @@ dev:
 	@$(MAKE) types
 	@$(LOAD_ENV) && docker compose up -d postgres valkey minio minio-init
 	@bash -c 'trap "$(LOAD_ENV) && docker compose down; kill $$(jobs -p) 2>/dev/null" INT TERM EXIT; genkit start -- air & cd web && bun dev & wait' || [ $$? -eq 130 ]
+
+# Development logs (docker compose)
+dev-logs:
+	@$(LOAD_ENV) && docker compose logs
 
 # Individual dev servers
 dev-go:
